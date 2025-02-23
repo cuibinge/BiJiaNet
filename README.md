@@ -1,2 +1,2 @@
-# bijianet
- Application Design and Development of bijianet
+# BiJiaNet
+ Application Design and Development of BiJiaNet
