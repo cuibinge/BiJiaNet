@@ -90,17 +90,25 @@ def plot_polygons_on_image(image, polygons, output_path):
         for i, (x, y) in enumerate(polygon):
             flipped_polygon[i] = [y, x]  # 交换 x 和 y 坐标
 
+        first_vertex = flipped_polygon[0]
+        last_vertex = flipped_polygon[-2]
+
+        distance = np.linalg.norm(last_vertex - first_vertex)
+        print("First vertex:", first_vertex)
+        print("Last vertex:", last_vertex)
+        print("Distance:", distance)
+
         # 绘制对折后的多边形
         #plt.plot(flipped_polygon[:, 1], flipped_polygon[:, 0], linewidth=2, color='red')  # 注意坐标顺序
 
-        plt.plot(flipped_polygon[:-1, 1], flipped_polygon[:-1, 0], linewidth=2, color='red')
+        #plt.plot(flipped_polygon[:-1, 1], flipped_polygon[:-1, 0], linewidth=2, color='red')
         # 检查首尾点是否一致
-        # if not np.array_equal(flipped_polygon[0], flipped_polygon[-1]):
-        #     # 如果首尾点不一致，只绘制除首尾连接之外的部分
-        #     plt.plot(flipped_polygon[:-1, 1], flipped_polygon[:-1, 0], linewidth=2, color='red')
-        # else:
-        #     # 如果首尾点一致，绘制整个多边形
-        #     plt.plot(flipped_polygon[:, 1], flipped_polygon[:, 0], linewidth=2, color='red')
+        if distance < 20:
+            # 如果首尾点距离<5，绘制整个多边形
+            plt.plot(flipped_polygon[:, 1], flipped_polygon[:, 0], linewidth=2, color='red')
+
+        else:
+            plt.plot(flipped_polygon[:-1, 1], flipped_polygon[:-1, 0], linewidth=2, color='red')
     # 关闭坐标轴
     plt.axis('off')
 
@@ -118,5 +126,6 @@ if __name__ == '__main__':
 
     image_dir = "inputs/PNGData/test/img"
     mask_dir = "outputs/PNGData_SFFNet_woDS/0"
+    #mask_dir = "inputs/PNGData/test/gtgt"
     output_dir = "outputs/PNGData_SFFNet_woDS/0/222"
     process_folder(image_dir, mask_dir, output_dir)
