@@ -22,35 +22,27 @@ def get_parser():
     parser.add_argument("--config-file", required=True, help="Path to the model configuration file (YAML).")
     parser.add_argument("--input", nargs="+", help="Input images. Accepts one or more image paths separated by spaces, "
              "or a glob pattern like 'path/to/folder/*.jpg' to process multiple images in a directory.")
-    # The '--input' argument accepts input images in several formats:
-    #
-    # 1. Single image path:
-    #    Example:
-    #        python demo.py --input path/to/image.jpg --output path/to/output/
-    #    In this case, 'args.input' will be a list with one element:
-    #        args.input = ["path/to/image.jpg"]
-    #
-    # 2. Multiple image paths:
-    #    Example:
-    #        python demo.py --input path/to/image1.jpg path/to/image2.jpg --output path/to/output/
-    #    Here, 'args.input' will be a list of the specified image paths:
-    #        args.input = ["path/to/image1.jpg", "path/to/image2.jpg"]
-    #
-    # 3. Glob pattern matching multiple images:
-    #    Example:
-    #        python script.py --input "path/to/images/*.jpg" --output path/to/output/
-    #    The script will expand the glob pattern to all matching files:
-    #        args.input = ["path/to/images/image1.jpg", "path/to/images/image2.jpg", ...]
-    #
-    # In the code, if 'args.input' contains only one element (which could be a glob pattern),
-    # it is expanded using 'glob.glob' to find all matching files:
-    #
-    #     if len(args.input) == 1:
-    #         args.input = glob.glob(os.path.expanduser(args.input[0]))
-    #         assert args.input, "No files found for the provided input pattern."
-    #
-    # This ensures that 'args.input' is always a list of file paths, making it flexible to accept
-    # single images, multiple images, or patterns matching multiple images.
+    #--input 参数接受多种格式的输入图像：
+    # 1. 单个图像路径：
+    # 示例：
+    # python demo.py --input path/to/image.jpg --output path/to/output/
+    # 在这种情况下，args.input 将是一个包含一个元素的列表：
+    # args.input = ["path/to/image.jpg"]
+    # 2. 多个图像路径：
+    # 示例：
+    # python demo.py --input path/to/image1.jpg path/to/image2.jpg --output path/to/output/
+    # 在这里，args.input 将是一个包含指定图像路径的列表：
+    # args.input = ["path/to/image1.jpg", "path/to/image2.jpg"]
+    # 3. 匹配多个图像的通配符模式：
+    # 示例：
+    # python script.py --input "path/to/images/*.jpg" --output path/to/output/
+    # 脚本会将通配符模式扩展为所有匹配的文件：
+    # args.input = ["path/to/images/image1.jpg", "path/to/images/image2.jpg", ...]
+    # 在代码中，如果 args.input 只包含一个元素（这可能是一个通配符模式），则使用 glob.glob 将其展开以查找所有匹配的文件：
+    # if len(args.input) == 1:
+    # args.input = glob.glob(os.path.expanduser(args.input[0]))
+    # assert args.input, "未找到与提供的输入模式匹配的文件。"
+    # 这样可以确保 args.input 始终是一个文件路径列表，使其能够灵活地接受各种输入格式。
     parser.add_argument("--output", required=True, help="Directory to save the output visualizations. Will create the directory if it doesn't exist.")
     parser.add_argument("--confidence-threshold", type=float, default=0.5, help="Confidence threshold for predictions")
     parser.add_argument("--corner-threshold", type=float, default=0.2, help="Threshold for vertex corner classification")
