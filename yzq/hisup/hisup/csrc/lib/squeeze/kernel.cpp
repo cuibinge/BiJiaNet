@@ -91,6 +91,7 @@ public:
     std::vector<Point> points_;
 
 };
+//通过计算角度差并判断是否小于等于精度值 prec
 bool isaligned(float phi, float theta, float prec)
 {
     theta -= phi;
@@ -103,7 +104,7 @@ bool isaligned(float phi, float theta, float prec)
 
     return theta <=prec;
 }
-
+//计算两个角度之间的差值，并将其限制在 -π 到 π 的范围内。
 float angle_diff(float a, float b)
 {
     a -= b;
@@ -112,6 +113,9 @@ float angle_diff(float a, float b)
     if( a < 0.0 ) a = -a;
     return a;
 }
+//从给定的起始点 (x, y) 开始，根据角度 ang 和精度 prec，生长出一个区域。
+//使用 isaligned 函数判断点是否符合角度条件，并将符合条件的点加入到区域中。
+//返回生长后的区域角度 reg_ang、区域点集 reg、区域内部点集 reg_int 和置信度 confidence。
 void region_grow(int x, int y, float ang,
                 float &reg_ang,
                 std::vector<Point>& reg,
@@ -151,6 +155,10 @@ void region_grow(int x, int y, float ang,
 
     reg_int.push_back(Point(int(x),int(y),reg_ang));
     confidence.push_back((float)cnt/(float)map(x,y).size());
+
+
+    //在区域生长过程中，角度的计算可能会受到局部噪声的影响，导致锯齿化现象。可以通过对角度进行平滑处理来减少这种影响。
+    float smooth_factor = 0.5; //增加平滑因子
     for(int i = 0; i < reg_int.size(); ++i)
     {
         for(int xx = (int)reg_int[i].x()-1; xx<= (int)reg_int[i].x()+1; ++xx)
@@ -170,7 +178,9 @@ void region_grow(int x, int y, float ang,
                         flag = true;
                         sumdx += cos(pt.ang());
                         sumdy += sin(pt.ang());
-                        reg_ang = atan2(sumdy, sumdx);
+                        //平滑角度更新
+                         reg_ang = smooth_factor * atan2(sumdy, sumdx) + (1 - smooth_factor) * reg_ang;
+                        //reg_ang = atan2(sumdy, sumdx);
                         ++cnt;
                     }
                 }
@@ -182,6 +192,18 @@ void region_grow(int x, int y, float ang,
                 // }
 
 
+                // 连通性检查
+                bool is_connected = false;
+                for (const auto& p : reg_int) {
+                    if (abs(p.x() - xx) <= 1 && abs(p.y() - yy) <= 1) {
+                        is_connected = true;
+                        break;
+                    }
+                }
+                if (!is_connected) {
+                    continue;
+                }
+
                 reg_int.push_back(Point(xx,yy,reg_ang));
                 confidence.push_back((float)cnt/(float)map(xx,yy).size());
             }
@@ -189,7 +211,8 @@ void region_grow(int x, int y, float ang,
     }
 }
 
-
+//将生长出的区域转换为矩形。
+//计算矩形的中心点 (x, y)、方向角 theta、长度范围 (l_min, l_max) 和宽度范围 (w_min, w_max)。
 bool region2rect(const std::vector<Point> &reg_int,
                  const std::vector<float> &confidence,
                  float reg_angle, float prec, float p, Rectangle &rect)
@@ -224,6 +247,13 @@ bool region2rect(const std::vector<Point> &reg_int,
       if( w > w_max ) w_max = w;
       if( w < w_min ) w_min = w;
     }
+    // 平滑边界处理
+    float smooth_margin = 0.5; // 平滑边界范围
+
+    l_min -= smooth_margin;
+    l_max += smooth_margin;
+    w_min -= smooth_margin;
+    w_max += smooth_margin;
 
     rect.x1 = x + l_min*dx;
     rect.y1 = y + l_min*dy;
@@ -255,6 +285,11 @@ bool region2rect(const std::vector<Point> &reg_int,
 //                 std::vector<float>& confidence,
 //                 PoLsMap& map,
 //                 float prec)
+
+
+//对矩形区域进行优化。
+//通过旋转和投影，去除不符合矩形形状的点。
+//更新点云映射，为后续的区域生长做准备。
 void refine(std::vector<Point> &reg_int,
             Rectangle& rect, std::vector<float> &confidence, PoLsMap& map)
 {
@@ -303,11 +338,14 @@ void refine(std::vector<Point> &reg_int,
             }
         }
     }
+
+
+     // 优化区域
     for(int k = start_w; k < end_w; ++k)
     {
         float ratio = (float)(indexes[k-start_w].size()/(end_l-start_l));
         const std::vector<int>& local_ind = indexes[k-start_w];
-        if(ratio<=0.1)
+        if(ratio<=0.1)// 如果比例小于 10%，认为是噪声列
             continue;
         for(int i = 0; i < local_ind.size();++i)
         {
@@ -316,9 +354,51 @@ void refine(std::vector<Point> &reg_int,
             int y = reg_int[id].y();
             for(int n = 0; n < map(x,y).size();++n)
                 map(x,y,n).used() = false;
-        }        
-        // std::cout<<indexes[k-start_w].size()<<"/"<<end_l-start_l<<"\n";
+        }
     }
+
+    // 重新计算矩形边界
+    float new_l_min = std::numeric_limits<float>::max();
+    float new_l_max = -std::numeric_limits<float>::max();
+    float new_w_min = std::numeric_limits<float>::max();
+    float new_w_max = -std::numeric_limits<float>::max();
+    for (const auto& p : reg_rot) {
+        float l = p.x();
+        float w = p.y();
+        if (l < new_l_min) new_l_min = l;
+        if (l > new_l_max) new_l_max = l;
+        if (w < new_w_min) new_w_min = w;
+        if (w > new_w_max) new_w_max = w;
+    }
+
+    rect.l_min = new_l_min;
+    rect.l_max = new_l_max;
+    rect.w_min = new_w_min;
+    rect.w_max = new_w_max;
+    rect.width = new_w_max - new_w_min;
+
+
+
+
+
+//    for(int k = start_w; k < end_w; ++k)
+//    {
+//        float ratio = (float)(indexes[k-start_w].size()/(end_l-start_l));
+//        const std::vector<int>& local_ind = indexes[k-start_w];
+//        if(ratio<=0.1)
+//            continue;
+//        for(int i = 0; i < local_ind.size();++i)
+//        {
+//            int id = local_ind[i];
+//            int x = reg_int[id].x();
+//            int y = reg_int[id].y();
+//            for(int n = 0; n < map(x,y).size();++n)
+//                map(x,y,n).used() = false;
+//        }
+//    }
+
+
+
     // int xx = reg_int[0].x();
     // int yy = reg_int[0].y();
     // std::vector<Point> reg_new;
@@ -326,7 +406,13 @@ void refine(std::vector<Point> &reg_int,
     // reg_int.clear();
     // region_grow(xx,yy,ang_rect,ang_rect,reg_new,reg_int,confidence,map,10.0/180.0*M_PI);
 }
+//输入参数包括图像高度 H、宽度 W、点云数据的坐标数组 (arr_x, arr_y)、角度数组 arr_ang 和点的数量 cnt;输出参数包括矩形数组 rectangles 和矩形数量 num。
 
+//1.初始化点云映射 map。
+//2.遍历每个点，调用 region_grow 函数生长区域。
+//3.将生长出的区域转换为矩形，并存储到 vec_rects 中。
+//4.对每个矩形调用 refine 函数进行优化。
+//5.将最终的矩形信息存储到输出数组 rectangles 中。
 
 void _region_grow(int H, int W,
                 const float* arr_x, const float* arr_y, const float* arr_ang,int cnt,
