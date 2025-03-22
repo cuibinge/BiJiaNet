@@ -1,5 +1,44 @@
 import torch
 import torch.nn as nn
+from shapely.geometry import Polygon
+
+def compute_iou(output, target):
+    """
+        计算两个多边形之间的 IoU
+        :param polygon1: 预测多边形，形状为 (N, 2)
+        :param polygon2: 真实多边形，形状为 (M, 2)
+        :return: IoU 值
+    """
+
+    print(output)
+    print(target)
+
+    # 将需要梯度计算的张量转换为 NumPy 数组
+    output_np = output.detach().numpy()
+    target_np = target["polygons"].detach().numpy()
+
+    poly1 = Polygon(output_np)
+    poly2 = Polygon(target_np)
+    if not poly1.is_valid or not poly2.is_valid:
+        return torch.tensor(0.0, dtype=torch.float32)
+    intersection = poly1.intersection(poly2).area
+    union = poly1.union(poly2).area
+    iou = intersection / union if union > 0 else 0.0
+    loss = 1 - iou
+    return torch.tensor(loss, dtype=torch.float32)
+
+def iou_loss(pred_polygons, target_polygons):
+    """
+        计算 IoU 损失
+        :param pred_polygons: 预测的多边形列表，每个元素形状为 (N, 2)
+        :param target_polygons: 真实的多边形列表，每个元素形状为 (M, 2)
+        :return: IoU 损失
+    """
+    loss = 0
+    for pred, target in zip(pred_polygons, target_polygons):
+        iou = compute_iou(pred, target)
+        loss += 1 - iou  # IoU 损失定义为 1 - IoU
+    return loss / len(pred_polygons)
 
 def compute_loss(output, target, criterion):
     """
