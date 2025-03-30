@@ -20,7 +20,7 @@ from torch.optim import SGD, Adam
 from torch.nn import CrossEntropyLoss
 import torch
 
-from utils.TT_Dataset import MyDataset
+from utils.TT_Dataset import MyDataset,MyDataset2
 from models.CMTFNet.CMTFNet import CMTFNet
 # from Models.model0603 import KRModel
 from torchvision import transforms
@@ -31,6 +31,10 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 class_name = ['Sea', 'Land']
 
+import svgwrite
+from PIL import Image
+from io import BytesIO
+import base64
 
 # entities_dict = {name:i for i,name in enumerate(class_name)}
 # relation_dict = {rel:i for i,rel in enumerate()}
@@ -56,7 +60,6 @@ def z_score_normal(image_data):
 
     image_data = cv2.merge([B1_normalization, B2_normalization, B3_normalization])
     return image_data
-
 
 def train(model, data_loader, optimizer1, criterion, args):
     model.train()
@@ -117,200 +120,290 @@ def train(model, data_loader, optimizer1, criterion, args):
             torch.save(model.state_dict(), os.path.join(args.weights_path, weight_name))
             print('epoch: {} | loss: {:.6f} | Saving model... \n'.format(epoch, avg_loss))
 
-
-# ========================================================================================================================================
-
-
-
-def model_predict_overlap_avg_prob(model, img_data, img_size, overlap=0.5, num_classes=2):
+def predict2(model, data_loader, args):
     model.eval()
-    row, col, dep = img_data.shape
-    stride = int(img_size * (1 - overlap))  # 计算步长，根据重叠率调整
+    save_dir = "C:/Users/zzc/Desktop/other/result/CMTFNet2/"
+    os.makedirs(save_dir, exist_ok=True)  # 确保目录存在
 
-    # 计算填充后的图像大小
-    padding_h = ((row - 1) // stride + 1) * stride + img_size - stride
-    padding_w = ((col - 1) // stride + 1) * stride + img_size - stride
+    for batch in data_loader:
+        images, filenames = batch
+        images = images.to(device)
 
-    # 初始化填充图像、概率累加矩阵和计数矩阵
-    padding_img = np.zeros((padding_h, padding_w, dep), dtype='float32')
-    padding_img[:row, :col, :] = img_data[:row, :col, :]
+        # 跳过不完整的批次（根据你的原有逻辑）
+        if images.shape[0] != args.batch:
+            break
 
-    # 用于存储每个类别的概率累加值
-    padding_prob_sum = np.zeros((padding_h, padding_w, num_classes), dtype='float32')
-    count_map = np.zeros((padding_h, padding_w), dtype='float32')  # 用于记录每个像素被预测的次数
+        # 前向传播
+        outputs = model(images.float())
 
-    # 对重叠区域的图像块进行预测
-    for i in range(0, padding_h - img_size + 1, stride):
-        for j in range(0, padding_w - img_size + 1, stride):
-            # 取 img_size 大小的图像块
-            img_data_ = padding_img[i:i + img_size, j:j + img_size, :]
-            img_data_ = img_data_[np.newaxis, :, :, :]
-            img_data_ = np.transpose(img_data_, (0, 3, 1, 2))
-            img_data_ = torch.from_numpy(img_data_).to(device)
+        # 处理每个样本
+        for i in range(outputs.shape[0]):
+            # 获取输出并处理（参考你的原有逻辑）
+            output = outputs[i].squeeze(0)  # 假设输出形状是 [C, H, W]
+            numpy_array = output.permute(1, 2, 0).cpu().detach().numpy()
 
-            # 模型预测，获取概率分布
-            with torch.no_grad():
-                y_pre = model(img_data_)
-                y_prob = torch.squeeze(y_pre, dim=0).softmax(dim=0).cpu().numpy()
-                y_prob = np.transpose(y_prob, (1, 2, 0))  # 调整形状为 (height, width, num_classes)
-
-            # 将预测概率累加到结果矩阵中
-            padding_prob_sum[i:i + img_size, j:j + img_size, :] += y_prob[:img_size, :img_size, :]
-            count_map[i:i + img_size, j:j + img_size] += 1
-
-    # 对概率矩阵进行归一化，计算平均概率
-    avg_prob = padding_prob_sum / count_map[..., np.newaxis]
-
-    # 根据平均概率选择具有最大值的类别作为最终预测
-    padding_pre = np.argmax(avg_prob, axis=-1)
-
-    # 返回裁剪到原始图像大小的预测结果
-    return padding_pre[:row, :col].astype('uint8')
-
-
-# ========================================================================================================================================
-
-def calculation(y_label, y_pre, row, col):
-    '''
-    本函数主要计算以下评估标准的值：
-    1、精准率
-    2、召回率
-    3、F1分数
-    '''
-
-    # 转成列向量
-    y_label = np.reshape(y_label, (row * col, 1))
-    y_pre = np.reshape(y_pre, (row * col, 1))
-
-    y_label.astype('float64')
-    y_pre.astype('float64')
-
-    # 精准率
-    precision = precision_score(y_label, y_pre, average=None)
-
-    # 召回率
-    recall = recall_score(y_label, y_pre, average=None)
-
-    # F1
-    f1 = f1_score(y_label, y_pre, average=None)
-
-    # kappa
-    kappa = cohen_kappa_score(y_label, y_pre)
-
-    return precision, recall, f1, kappa
-
-
-# ========================================================================================================================================
-
-def estimate(y_label, y_pred, model_hdf5_name, class_name, dirname):
-    '''
-    本函数主要实现以下功能：
-    1、计算准确率
-    2、将各种评估指标存成一个json格式的txt文件
-    @parameter:
-        y_label:标签
-        y_pred:预测结果
-        model_hdf5_name:模型名
-        class_name:类型
-        dirname:存放路径
-    '''
-
-    # 准确率
-    acc = np.mean(np.equal(y_label, y_pred) + 0)
-    print('=================================================================================================')
-    print('The estimate result of {} are as follows:'.format(model_hdf5_name))
-    print('The acc of {} is {}'.format(model_hdf5_name, acc))
-
-    precision, recall, f1, kappa = calculation(y_label, y_pred, y_label.shape[0], y_label.shape[1])
-
-    # for i in range(len(class_name)):
-    #     print('{}    F1: {:.5f}, Precision: {:.5f}, Recall: {:.5f}, kappa: {:.5f}'.format(class_name[i], f1[i],
-    #                                                                                       precision[i], recall[i],
-    #                                                                                       kappa))
-    # print('=================================================================================================')
-    if len(f1) == len(class_name):
-        result = {}
-        for i in range(len(class_name)):
-            result[class_name[i]] = []
-            tmp = {}
-            tmp['Recall'] = str(round(recall[i], 5))
-            tmp['Precision'] = str(round(precision[i], 5))
-            tmp['F1'] = str(round(f1[i], 5))
-            result[class_name[i]].append(tmp)
-
-        result['Model Name'] = [model_hdf5_name]
-        result['Accuracy'] = str(round(acc, 5))
-        result['kappa'] = str(kappa)
-
-        # 写入txt
-        txt_name = "epoch_" + model_hdf5_name.split("_")[1] + "_acc_" + str(round(acc, 5))
-        with open(os.path.join(dirname, txt_name + '.txt'), 'a', encoding="utf-8") as f:
-            f.write(json.dumps(result, ensure_ascii=False))
-    else:
-        print("======================================>Estimate error!===========================================")
-    return acc
-
-def model_predict_single_patch(model, img_data, num_classes=2):
-    """
-    对单个小图块进行推理
-    :param model: 已经加载的模型
-    :param img_data: 输入的小图块数据，形状为 (height, width, depth)，类型为 float32
-    :param num_classes: 分类的类别数，默认为2
-    :return: 推理结果，形状为 (height, width)，类型为 uint8
-    """
-    model.eval()  # 设置模型为评估模式
-
-    # 数据预处理：添加批次维度并转换为模型所需的格式
-    img_data = img_data[np.newaxis, :, :, :]  # 添加批次维度
-    img_data = np.transpose(img_data, (0, 3, 1, 2))  # 转换为 (batch_size, depth, height, width)
-    img_data = img_data.to(device)  # 转换为张量并移动到设备上
-    print(img_data.shape)
-    # 模型预测
-    with torch.no_grad():
-        y_pre = model(img_data)
-        y_prob = torch.squeeze(y_pre, dim=0).softmax(dim=0).cpu().numpy()  # 获取概率分布
-        y_prob = np.transpose(y_prob, (1, 2, 0))  # 调整形状为 (height, width, num_classes)
-
-    # 根据概率选择具有最大值的类别作为最终预测
-    pre_label = np.argmax(y_prob, axis=-1).astype('uint8')
-
-    return pre_label
-
-def predict(model, data_loader, optimizer1, criterion, args):
-    model.eval()
-    total_epochs = 1  # 总的训练 epoch 数
-
-    for epoch in range(total_epochs):
-        start_time = time.time()  # 记录开始时间
-        print('======================epoch:{}/{}========================='.format(epoch, total_epochs))
-        for data in data_loader:
-            img, _ = data
-            img = img.to(device)
-            # 整除批次
-            if img.shape[0] != args.batch:
-                break
-            output = model(img.float())
-            tensor = output.squeeze(0)
-            numpy_array = tensor.detach().numpy()
-            numpy_array = numpy_array.transpose(1, 2, 0)  # 转换形状为 (128, 128, 2)
-
-            # 应用 softmax 归一化，将输出转换为概率
-            # softmax 函数将每个像素的两个通道值转换为概率分布
+            # 应用 softmax 和阈值化
             def softmax(x):
                 e_x = np.exp(x - np.max(x, axis=-1, keepdims=True))
                 return e_x / e_x.sum(axis=-1, keepdims=True)
 
             probability_array = softmax(numpy_array)
-
-            # 如果需要，可以将概率阈值化为二进制分类结果
-            # 假设阈值为0.5，大于0.5的属于类别1，否则属于类别0
             binary_array = (probability_array[:, :, 1] > 0.5).astype(np.uint8)
-            save_path = "C:/Users/zzc/Desktop/other/result/CMTFNet/1.tif"
+
+            # 构建保存路径
+            filename = filenames[i]  # 文件名（如 "72.tif"）
+            save_path = os.path.join(save_dir, filename)
+
+            # 保存结果
             tiff.imwrite(save_path, binary_array)
 
-            sdas
+def predict_large_image(model, large_image_path, args):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model.eval()
+
+    # 读取大图
+    large_image = tiff.imread(large_image_path).astype(np.float32)
+    original_height, original_width = large_image.shape[:2]
+
+    # 创建保存结果的数组
+    result_map = np.zeros((original_height, original_width), dtype=np.uint8)
+    count_map = np.zeros((original_height, original_width), dtype=np.uint8)
+
+    # 滑动窗口参数设置
+    window_size = 128
+    stride = 64  # 可以根据需要调整重叠步长
+
+    # 创建滑动窗口数据集
+    class SlideWindowDataset(Dataset):
+        def __init__(self, img):
+            self.img = img
+            self.coords = []
+
+            # 生成滑动窗口坐标
+            for y in range(0, img.shape[0], stride):
+                for x in range(0, img.shape[1], stride):
+                    if y + window_size > img.shape[0]:
+                        y = img.shape[0] - window_size
+                    if x + window_size > img.shape[1]:
+                        x = img.shape[1] - window_size
+                    self.coords.append((y, x))
+
+            # 处理右下方边缘
+            if (img.shape[0] - window_size) % stride != 0:
+                self.coords.append((img.shape[0] - window_size, img.shape[1] - window_size))
+
+        def __len__(self):
+            return len(self.coords)
+
+        def __getitem__(self, idx):
+            y, x = self.coords[idx]
+            window = self.img[y:y + window_size, x:x + window_size]
+            return torch.from_numpy(window), (y, x)
 
 
+    # 自定义 collate 函数
+    def custom_collate(batch):
+        windows = [item[0] for item in batch]
+        coords = [item[1] for item in batch]  # 保持坐标为元组列表
+        windows = torch.stack(windows, dim=0)
+        return windows, coords
+    dataset = SlideWindowDataset(large_image)
+    # 创建数据加载器（应用自定义 collate）
+    loader = DataLoader(
+        dataset,
+        batch_size=args.batch,
+        shuffle=False,
+        collate_fn=custom_collate
+    )
+
+    # 处理每个窗口
+    with torch.no_grad():
+        for batch in loader:
+            windows, coords = batch
+            # windows = windows.to(device).unsqueeze(1)  # 添加通道维度 [B, 1, H, W]
+            windows = windows.permute([0,-1,1,2])
+            # print(windows.shape)
+            # 前向传播
+            outputs = model(windows.float())
+
+            # 处理每个窗口结果
+            for i in range(outputs.shape[0]):
+                output = outputs[i].squeeze(0)  # 假设输出形状是 [C, H, W]
+                numpy_array = output.permute(1, 2, 0).cpu().numpy()
+
+                # 应用softmax和阈值化（保持原有逻辑）
+                def softmax(x):
+                    e_x = np.exp(x - np.max(x, axis=-1, keepdims=True))
+                    return e_x / e_x.sum(axis=-1, keepdims=True)
+
+                probability_array = softmax(numpy_array)
+                binary_array = (probability_array[:, :, 1] > 0.5).astype(np.uint8)
+
+                # 获取当前窗口坐标
+                y_start, x_start = coords[i]
+                y_end = y_start + window_size
+                x_end = x_start + window_size
+
+                # 累加到结果图
+                result_map[y_start:y_end, x_start:x_end] += binary_array
+                count_map[y_start:y_end, x_start:x_end] += 1
+
+    # 平均重叠区域
+    result_map = np.where(count_map > 0, result_map / count_map, 0)
+    final_result = (result_map > 0.5).astype(np.uint8)
+
+    # 保存结果
+    save_path = os.path.join("C:/Users/zzc/Desktop/other/result/CMTFNet/",
+                             os.path.basename(large_image_path))
+    tiff.imwrite(save_path, final_result)
+    print("推理结束..........................................")
+
+def predict_and_vectorize(model, image_path, args):
+    """端到端执行预测并生成矢量覆盖图"""
+    # ---------------------- 1. 大图预测 ----------------------
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model.eval()
+
+    # 读取大图
+    large_image = tiff.imread(image_path).astype(np.float32)
+    original_height, original_width = large_image.shape[:2]
+
+    # 初始化结果数组
+    result_map = np.zeros((original_height, original_width), dtype=np.uint8)
+    count_map = np.zeros_like(result_map)
+
+    # 滑动窗口参数
+    window_size = 128
+    stride = 64
+
+    # 滑动窗口数据集
+    class SlideWindowDataset(Dataset):
+        def __init__(self, img):
+            self.img = img
+            self.coords = []
+
+            # 生成滑动窗口坐标
+            for y in range(0, img.shape[0], stride):
+                for x in range(0, img.shape[1], stride):
+                    if y + window_size > img.shape[0]:
+                        y = img.shape[0] - window_size
+                    if x + window_size > img.shape[1]:
+                        x = img.shape[1] - window_size
+                    self.coords.append((y, x))
+
+            # 处理右下方边缘
+            if (img.shape[0] - window_size) % stride != 0:
+                self.coords.append((img.shape[0] - window_size, img.shape[1] - window_size))
+
+        def __len__(self):
+            return len(self.coords)
+
+        def __getitem__(self, idx):
+            y, x = self.coords[idx]
+            window = self.img[y:y + window_size, x:x + window_size]
+            return torch.from_numpy(window), (y, x)
+
+    def custom_collate(batch):
+        windows = [item[0] for item in batch]
+        coords = [item[1] for item in batch]  # 保持坐标为元组列表
+        windows = torch.stack(windows, dim=0)
+        return windows, coords
+
+    dataset = SlideWindowDataset(large_image)
+    # 创建数据加载器（应用自定义 collate）
+    loader = DataLoader(
+        dataset,
+        shuffle=False,
+        collate_fn=custom_collate
+    )
+    # 预测处理
+    with torch.no_grad():
+        for batch in loader:
+            windows, coords = batch
+            # windows = windows.to(device).unsqueeze(1)
+            windows = windows.permute([0, -1, 1, 2])
+            outputs = model(windows.float())
+
+            for i in range(outputs.shape[0]):
+                output = outputs[i].squeeze(0)  # 假设输出形状是 [C, H, W]
+                numpy_array = output.permute(1, 2, 0).cpu().numpy()
+
+                # 应用softmax和阈值化（保持原有逻辑）
+                def softmax(x):
+                    e_x = np.exp(x - np.max(x, axis=-1, keepdims=True))
+                    return e_x / e_x.sum(axis=-1, keepdims=True)
+
+                probability_array = softmax(numpy_array)
+                binary_array = (probability_array[:, :, 1] > 0.5).astype(np.uint8)
+
+                # 获取当前窗口坐标
+                y_start, x_start = coords[i]
+                y_end = y_start + window_size
+                x_end = x_start + window_size
+
+                # 累加到结果图
+                result_map[y_start:y_end, x_start:x_end] += binary_array
+                count_map[y_start:y_end, x_start:x_end] += 1
+
+    # 最终二值化结果
+    final_result = (result_map / np.maximum(count_map, 1) > 0.5).astype(np.uint8)
+
+    # ---------------------- 2. 边缘提取与矢量化 ----------------------
+    # 直接使用预测结果，无需读取文件
+    edge_map = final_result.astype(np.uint8) * 255
+
+    # 查找轮廓（直接使用二值结果）
+    contours, _ = cv2.findContours(edge_map, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    # 轮廓简化
+    approx_contours = []
+    for cnt in contours:
+        epsilon = 0.01 * cv2.arcLength(cnt, True)
+        approx = cv2.approxPolyDP(cnt, epsilon, True)
+        approx_contours.append(approx)
+
+    # 处理原始图像用于叠加显示
+    target_image = tiff.imread(image_path)
+    if target_image.dtype == np.uint16:
+        target_image = cv2.convertScaleAbs(target_image, alpha=(255.0 / 65535.0))
+    elif target_image.dtype == np.float32:
+        target_image = (target_image * 255).astype(np.uint8)
+    if len(target_image.shape) == 2:
+        target_image = cv2.cvtColor(target_image, cv2.COLOR_GRAY2RGB)
+
+    # 在 predict_and_vectorize 函数中添加以下代码
+    output_dir = "results"
+    os.makedirs(output_dir, exist_ok=True)  # 关键修复：自动创建目录
+
+    # 生成完整保存路径
+    output_filename = os.path.basename(image_path).replace(".tif", ".svg")
+    output_path = os.path.join(output_dir, output_filename)
+
+    # 创建 SVG 画布
+    dwg = svgwrite.Drawing(
+        filename=output_path,
+        size=(target_image.shape[1], target_image.shape[0]),
+        profile='tiny'
+    )
+
+    # 添加背景图
+    buffered = BytesIO()
+    Image.fromarray(target_image).save(buffered, format="PNG")
+    dwg.add(dwg.image(
+        href=f"data:image/png;base64,{base64.b64encode(buffered.getvalue()).decode()}",
+        insert=(0, 0),
+        size=target_image.shape[:2][::-1]
+    ))
+
+    # 添加矢量轮廓
+    for cnt in approx_contours:
+        if len(cnt) < 2: continue
+        points = cnt.squeeze().tolist()
+        points_sorted = sorted(points, key=lambda p: (p[1] // 5, p[0]))  # 按Y轴分组排序
+        path_data = "M " + " L ".join(f"{x},{y}" for x, y in points_sorted)
+        dwg.add(dwg.path(d=path_data, fill="none", stroke="lime", stroke_width=1))
+    dwg.save()
+    print(f"处理完成: {image_path}")
 
 
 
@@ -354,34 +447,23 @@ if __name__ == "__main__":
 
     # 开始训练
     # train(model, data_loader, optimizer1, criterion, args)
-
-
+    mydataset2 = MyDataset2(args.image_path)
+    data_loader_predict = DataLoader(dataset=mydataset2, batch_size=args.batch, shuffle=True, pin_memory=True)
     # 验证
     label_data = imageio.imread(args.val_label_path) - 1
     image_data = imageio.imread(args.val_image_path)
     image_data = z_score_normal(image_data)
     weights = os.listdir(args.weights_path)
     best_acc = 0
-    for w in weights:
-        model.load_state_dict(torch.load(os.path.join(args.weights_path, w), map_location=device))
-        predict(model, data_loader, optimizer1, criterion, args)
     # for w in weights:
-    #     image = imageio.imread('C:\\Users\\zzc\\Desktop\\other\\datasets\\jiaozhouwan\\128\\img\\64.tif')
-    #     image = z_score_normal(image)
-    #     image = torch.from_numpy(image)
     #     model.load_state_dict(torch.load(os.path.join(args.weights_path, w), map_location=device))
-    #     output = model_predict_single_patch(model,image,num_classes=2)
-    #     save_name = "epoch_" + w.split("_")[1]  + ".tif"
-    #     imageio.imwrite(os.path.join(args.result_path, save_name), output)
-    #     print("Sucessfully saved to " + os.path.join(args.result_path, save_name))
+    #     predict2(model, data_loader_predict, args)
+
+
+    # for w in weights:
+    #     model.load_state_dict(torch.load(os.path.join(args.weights_path, w), map_location=device))
+    #     predict_large_image(model,args.val_image_path,args)
+
     for w in weights:
         model.load_state_dict(torch.load(os.path.join(args.weights_path, w), map_location=device))
-        output = model_predict_overlap_avg_prob(model, image_data, img_size=256, overlap=0.5, num_classes=2)
-        # acc = estimate(label_data, output, w, class_name, args.result_path)
-        # print('The acc of {} is {}'.format(w, acc))
-        save_name = "epoch_" + w.split("_")[1] + ".tif"
-        # save_name = "epoch_" + w.split("_")[1] + "_acc_" + ".tif"
-        imageio.imwrite(os.path.join(args.result_path, save_name), output)
-        # print("Sucessfully saved to " + os.path.join(args.result_path, save_name))
-        # print('=================================================================================================')
-
+        predict_and_vectorize(model,args.val_image_path,args)
