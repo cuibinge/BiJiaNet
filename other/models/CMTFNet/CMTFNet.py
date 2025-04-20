@@ -374,19 +374,25 @@ import torch.nn.functional as F
 
 
 class PositionalEncoding(nn.Module):
-    """支持批量处理的位置编码模块"""
-    def __init__(self, d_model: int):
+    def __init__(self, d_model):
         super().__init__()
+        # 动态调整隐藏层维度
+        hidden_dim = max(d_model * 2, 4)  # 示例：使用扩展维度
+
         self.pe = nn.Sequential(
-            nn.Linear(1, d_model // 4),
+            nn.Linear(1, hidden_dim),
             nn.GELU(),
-            nn.Linear(d_model // 4, d_model)
+            nn.Linear(hidden_dim, d_model)
         )
 
-    def forward(self, λ: torch.Tensor) -> torch.Tensor:
-        # 输入 λ: [batch, C]
-        # 输出: [batch, C, D]
-        return self.pe(λ.unsqueeze(-1))  # [batch, C, 1] → [batch, C, D]
+        # 初始化权重
+        for layer in self.pe:
+            if isinstance(layer, nn.Linear):
+                nn.init.kaiming_normal_(layer.weight)
+
+    def forward(self, λ):
+        # 输入λ形状：[batch, channels] -> [batch, channels, 1]
+        return self.pe(λ.unsqueeze(-1))
 
 class DynamicConvGenerator(nn.Module):
     """支持批量处理的动态卷积核生成器"""
@@ -559,10 +565,12 @@ class CMTFNet(nn.Module):
         return x
 
 
+
+
 if __name__ == '__main__':
 
     x = torch.randn(8, 3, 512, 512)
-    # net = CMTFNet(num_classes=2)
+    net = CMTFNet(num_classes=2)
     # flops, params = ptflops.get_model_complexity_info(net, (3, 128, 128), as_strings=True,
     #                                                   print_per_layer_stat=True, verbose=True)
     # print('FLOPs:  ' + flops)
