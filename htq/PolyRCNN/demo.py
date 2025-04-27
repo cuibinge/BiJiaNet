@@ -7,12 +7,13 @@ import numpy as np
 import torch
 import shapely.geometry
 
+from shapely.geometry import Polygon, LineString
+from shapely.validation import make_valid
 from detectron2.config import get_cfg
 from detectron2.data.detection_utils import read_image
 from detectron2.modeling import build_model
 from detectron2.checkpoint import DetectionCheckpointer
 from tqdm import tqdm
-
 
 def get_parser():
     """
@@ -93,9 +94,9 @@ def visualize_polygons(img, polygons):
         polygon = np.round(polygon).astype(np.int32).reshape((-1, 1, 2)) * 3  # enlarge polygon for visualization
         col = colors[i % len(colors)]
         img = cv2.polylines(img, [polygon], True, col, 2)
-        polygon = polygon.reshape((-1, 2))
-        for cor in polygon:
-            img = cv2.circle(img, (cor[0], cor[1]), 4, col, -1)
+        # polygon = polygon.reshape((-1, 2))
+        # for cor in polygon:
+        #     img = cv2.circle(img, (cor[0], cor[1]), 4, col, -1)
     return img
 
 
@@ -117,6 +118,69 @@ def visualize_bboxes(img, bboxes):
         img = cv2.rectangle(img, (bbox[0], bbox[1]), (bbox[2], bbox[3]), col, 2)
     return img
 
+
+def fix_self_intersections(polygon):
+    """
+    Fix self-intersecting polygons by reordering vertices and creating valid geometry.
+
+    :param polygon: np.ndarray, shape (N, 2), the coordinates of polygon vertices
+    :return: np.ndarray, the fixed polygon vertices
+    """
+    # 转换为Shapely polygon
+    shapely_poly = Polygon(polygon)
+
+    # 检查多边形是不是合理的
+    if not shapely_poly.is_valid:
+        # Fix self-intersections by making the polygon valid
+        print("-------------------------------------")
+        valid_poly = make_valid(shapely_poly)
+
+        # Handle different output types from make_valid
+        if isinstance(valid_poly, Polygon):
+            # Simple case - got back a single polygon
+            fixed_coords = np.array(valid_poly.exterior.coords)
+        elif isinstance(valid_poly, MultiPolygon):
+            # Complex case - got multiple polygons, take the largest one
+            largest_poly = max(valid_poly.geoms, key=lambda p: p.area)
+            fixed_coords = np.array(largest_poly.exterior.coords)
+        elif isinstance(valid_poly, GeometryCollection):
+            # Extract polygons from geometry collection
+            polygons = [g for g in valid_poly.geoms if isinstance(g, Polygon)]
+            if polygons:
+                largest_poly = max(polygons, key=lambda p: p.area)
+                fixed_coords = np.array(largest_poly.exterior.coords)
+            else:
+                # Fallback to original if no valid polygons found
+                fixed_coords = polygon
+        else:
+            # Fallback to original if unexpected type
+            fixed_coords = polygon
+
+        return fixed_coords
+
+    # Return original if already valid
+    return polygon
+
+
+def sort_polygon_vertices(polygon):
+    """
+    Sort polygon vertices in clockwise order to potentially fix self-intersections.
+
+    :param polygon: np.ndarray, shape (N, 2), the coordinates of polygon vertices
+    :return: np.ndarray, the sorted polygon vertices
+    """
+    # Calculate centroid
+    centroid = np.mean(polygon, axis=0)
+
+    # Calculate angles from centroid to each point
+    vectors = polygon - centroid
+    angles = np.arctan2(vectors[:, 1], vectors[:, 0])
+
+    # Sort vertices by angle
+    sorted_indices = np.argsort(angles)
+
+    # Return sorted vertices (clockwise order)
+    return polygon[sorted_indices]
 
 def reduce_redundant_vertices(corner_scores, polygons, corner_threshold, bbox_scores, bboxes, nms, merge, nms_thres=2, merge_thres=10):
     """
@@ -180,7 +244,10 @@ def reduce_redundant_vertices(corner_scores, polygons, corner_threshold, bbox_sc
                 pred_polygon = simplified_pred_polygon
 
         # Revalidate polygons after optional operations
-        if pred_polygon.shape[0] <= 2 or shapely.geometry.Polygon(pred_polygon).area <= 10:
+        # if pred_polygon.shape[0] <= 2 or shapely.geometry.Polygon(pred_polygon).area <= 10:
+        #     continue
+
+        if pred_polygon.shape[0] <= 2:
             continue
 
         pred_polygons_thres.append(pred_polygon)
@@ -388,7 +455,7 @@ def main():
 
         # 保存结果
         base_filename = os.path.splitext(os.path.basename(path))[0]
-        cv2.imwrite(os.path.join(args.output, f"{base_filename}_bboxes.jpg"), image_with_bboxes[:, :, ::-1])
+        # cv2.imwrite(os.path.join(args.output, f"{base_filename}_bboxes.jpg"), image_with_bboxes[:, :, ::-1])
         cv2.imwrite(os.path.join(args.output, f"{base_filename}_polygons.jpg"), image_with_polygons[:, :, ::-1])
 
 
