@@ -1,5 +1,0 @@
-_BASE_: "polyrcnn.res50.100pro.aicrowd.yaml"
-MODEL:
-  WEIGHTS: "output/model_0579017.pth"
-DATASETS:
-  TEST: ("aicrowd_test",)
