@@ -1,35 +1,3 @@
-from typing import Dict, List, Tuple, Union
-import subprocess, sys
-from PIL import Image
-import torch
-import torch.nn as nn
-import torchvision.transforms as T
-
-# =====================  Neighbour fusion blocks  ===========================
-class FeatureFusion(nn.Module):
-    """Concatenate current + 4 neighbours, add direction embeddings, 1×1 conv."""
-
-    def __init__(self, feat_ch: int = 32, max_neighbors: int = 4, positional: bool = True):
-        super().__init__()
-        self.max_n = max_neighbors
-        self.positional = positional
-
-        if positional:
-            self.dir_embed = nn.Parameter(torch.zeros(max_neighbors, feat_ch, 1, 1))
-            nn.init.xavier_uniform_(self.dir_embed)
-        else:
-            self.register_parameter("dir_embed", None)
-
-        self.conv1x1 = nn.Conv2d(feat_ch * (1 + max_neighbors), feat_ch, 1)
-
-    def forward(self, cur: torch.Tensor, neigh: List[torch.Tensor]):
-        # pad
-        neigh_pad = neigh + [torch.zeros_like(cur) for _ in range(self.max_n - len(neigh))]
-        if self.positional:
-            neigh_pad = [neigh_pad[i] + self.dir_embed[i] for i in range(self.max_n)]
-        stacked = torch.cat([cur] + neigh_pad, 1)
-        return self.conv1x1(stacked)
-
 class EnhancedFeatureFusion(nn.Module):
     """
     5×32 → DW-3×3 → PW-1×1 → SE → Direction-gated加权 → 32
@@ -62,7 +30,7 @@ class EnhancedFeatureFusion(nn.Module):
         # depthwise + pointwise
         x = self.pw(self.dw(concat))  # (B,32,H,W)
 
-        # -------- SE ----------
+        # -------- SE ----------se 是在 拼接张量上 做的 global-pool，能看到「中心+邻居」整体统计
         se = F.adaptive_avg_pool2d(concat, 1)
         se = torch.relu(self.se_fc1(se))
         se = torch.sigmoid(self.se_fc2(se))
@@ -73,7 +41,7 @@ class EnhancedFeatureFusion(nn.Module):
         edge_hint = torch.stack([n.mean(1, keepdim=True) for n in neigh_pad], 1).max(1)[0]
         x = x * (1 + 0.5 * torch.sigmoid(edge_hint))  # 只放大边缘
 
-        # -------- direction gate ----------
+        # -------- direction gate ----------每个方向一个可学习标量
         gaps = torch.stack([F.adaptive_avg_pool2d(n, 1).squeeze(-1).squeeze(-1)
                             for n in neigh_pad], dim=1)  # (B,4,32)
         alpha = torch.sigmoid(self.dir_w).view(1, self.max_n, 1)
